@@ -24,9 +24,9 @@
        font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;}
   h1{font-size:15px;font-weight:500;margin:0 0 12px;}
   .bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px;}
-  button{font-size:12px;padding:5px 10px;border:0.5px solid #b0b0b0;border-radius:6px;
+  button,select{font-size:12px;padding:5px 10px;border:0.5px solid #b0b0b0;border-radius:6px;
          background:transparent;cursor:pointer;color:#1a1a1a;}
-  button:hover{background:#f2f2f2;}
+  button:hover,select:hover{background:#f2f2f2;}
   .hint{font-size:12px;color:#666;}
   #legend{display:flex;flex-wrap:wrap;gap:8px 14px;margin-bottom:14px;}
   #legend span{display:flex;align-items:center;gap:5px;font-size:12px;color:#444;cursor:pointer;
@@ -38,10 +38,15 @@
 <body>
 <h1>市场大盘与 15 个品牌季度走势（美元）</h1>
 <div class="bar">
-  <button id="scaleBtn">切换到对数刻度</button>
+  <label class="hint" for="scaleMode">纵轴刻度</label>
+  <select id="scaleMode">
+    <option value="brokenRevenue">断轴</option>
+    <option value="linear">普通线性</option>
+    <option value="logarithmic">对数</option>
+  </select>
   <button id="allBtn">显示全部曲线</button>
   <button id="noneBtn">关闭全部曲线</button>
-  <span class="hint">浅蓝柱为市场大盘 · 点击品牌名可隐藏/显示曲线</span>
+  <span class="hint" id="chartHint" aria-live="polite">浅蓝柱为市场大盘 · 断轴省略 $70,000–$200,000 · 点击品牌名可隐藏/显示曲线</span>
 </div>
 <div id="legend"></div>
 <div class="wrap"><canvas id="chart"></canvas></div>
@@ -68,15 +73,82 @@ const series=[
 const market=[237108.59,408851.49,302583.44,347232.60,330087.06,453103.14,465548.96,561948.90];
 const fmt=v=>'$'+Number(v).toLocaleString('en-US');
 
+const axisBreak = {
+  lowerMax: 70000, upperMin: 200000, upperMax: 600000,
+  lowerShare: 0.62, gapShare: 0.04
+};
+const {lowerMax, upperMin, upperMax, lowerShare, gapShare} = axisBreak;
+const upperStart = lowerShare + gapShare;
+
+class BrokenRevenueScale extends Chart.LinearScale {
+  static id = 'brokenRevenue';
+  static defaults = Chart.LinearScale.defaults;
+
+  determineDataLimits() {
+    this.min = 0;
+    this.max = upperMax;
+  }
+
+  buildTicks() {
+    return [0,10000,20000,30000,40000,50000,60000,lowerMax,
+            upperMin,300000,400000,500000,upperMax].map(value => ({value}));
+  }
+
+  getPixelForValue(value) {
+    if (value == null) return NaN;
+    if (value <= lowerMax) return this.getPixelForDecimal(value / lowerMax * lowerShare);
+    if (value >= upperMin) {
+      return this.getPixelForDecimal(upperStart + (value - upperMin) / (upperMax - upperMin) * (1 - upperStart));
+    }
+    return this.getPixelForDecimal(lowerShare + (value - lowerMax) / (upperMin - lowerMax) * gapShare);
+  }
+
+  getValueForPixel(pixel) {
+    const fraction = this.getDecimalForPixel(pixel);
+    if (fraction <= lowerShare) return fraction / lowerShare * lowerMax;
+    if (fraction >= upperStart) {
+      return upperMin + (fraction - upperStart) / (1 - upperStart) * (upperMax - upperMin);
+    }
+    return lowerMax + (fraction - lowerShare) / gapShare * (upperMin - lowerMax);
+  }
+}
+Chart.register(BrokenRevenueScale);
+
+const breakMarks = {
+  id: 'breakMarks',
+  afterDatasetsDraw({ctx, chartArea, scales}) {
+    const {y} = scales;
+    if (y.type !== BrokenRevenueScale.id) return;
+    const {left, right} = chartArea;
+    const top = y.getPixelForValue(upperMin);
+    const bottom = y.getPixelForValue(lowerMax);
+    const middle = (top + bottom) / 2;
+
+    ctx.save();
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(left - 5, top + 2, right - left + 5, bottom - top - 4);
+    ctx.strokeStyle = '#777';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    for (const offset of [-3, 3]) {
+      ctx.moveTo(left - 5, middle + offset + 2);
+      ctx.lineTo(left + 5, middle + offset - 2);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+};
+
 const datasets=[{type:'bar',label:'市场大盘',data:market,backgroundColor:'#B5D4F4',
   borderColor:'#85B7EB',borderWidth:1,order:20}];
 series.forEach(s=>datasets.push({type:'line',label:s.n,data:s.d,borderColor:s.c,
   backgroundColor:s.c,borderWidth:1.8,pointRadius:2.6,pointHoverRadius:5,tension:0.25,order:1}));
 
 const chart=new Chart(document.getElementById('chart'),{
+  plugins:[breakMarks],
   data:{labels:Q,datasets:datasets},
   options:{
-    responsive:true,maintainAspectRatio:false,
+    responsive:true,maintainAspectRatio:false,animation:false,
     interaction:{mode:'index',intersect:false},
     plugins:{
       legend:{display:false},
@@ -84,8 +156,8 @@ const chart=new Chart(document.getElementById('chart'),{
     },
     scales:{
       x:{ticks:{autoSkip:false,font:{size:12}},grid:{display:false}},
-      y:{beginAtZero:true,type:'linear',
-         ticks:{callback:v=>v>=1000?Math.round(v/1000)+'k':v,font:{size:11}},
+      y:{beginAtZero:true,type:BrokenRevenueScale.id,
+         ticks:{autoSkip:false,callback:v=>v>=1000?Math.round(v/1000)+'k':v,font:{size:11}},
          grid:{color:'rgba(0,0,0,0.06)'}}
     }
   }
@@ -116,16 +188,19 @@ document.getElementById('noneBtn').onclick=()=>{
   chart.update();
 };
 
-let isLog=false;
-document.getElementById('scaleBtn').onclick=()=>{
-  isLog=!isLog;
-  chart.options.scales.y.type=isLog?'logarithmic':'linear';
-  chart.options.scales.y.beginAtZero=!isLog;
-  chart.options.scales.y.ticks.callback=isLog
-    ?(v=>v>=1000?Math.round(v/1000)+'k':v)
-    :(v=>Math.round(v/1000)+'k');
-  chart.data.datasets[0].hidden=isLog;
-  document.getElementById('scaleBtn').textContent=isLog?'切换到线性刻度':'切换到对数刻度';
+const scaleMode = document.getElementById('scaleMode');
+const chartHint = document.getElementById('chartHint');
+scaleMode.onchange = () => {
+  const mode = scaleMode.value;
+  const isLog = mode === 'logarithmic';
+  const isBroken = mode === BrokenRevenueScale.id;
+  chart.options.scales.y.type = mode;
+  chart.options.scales.y.beginAtZero = !isLog;
+  chart.options.scales.y.ticks.autoSkip = !isBroken;
+  chart.data.datasets[0].hidden = isLog;
+  chartHint.textContent = isLog
+    ? '对数刻度仅显示品牌曲线 · 点击品牌名可隐藏/显示曲线'
+    : '浅蓝柱为市场大盘 · ' + (isBroken ? '断轴省略 $70,000–$200,000 · ' : '') + '点击品牌名可隐藏/显示曲线';
   chart.update();
 };
 </script>
