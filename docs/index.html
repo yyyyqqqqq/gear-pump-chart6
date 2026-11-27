@@ -222,10 +222,14 @@ function syncChart() {
   const isBroken = scaleType === BrokenRevenueScale.id;
   const values = isGrowth ? growth : revenue;
 
-  chart.data.datasets.forEach((dataset, index) => { dataset.data = values[index]; });
+  chart.data.datasets.forEach((dataset, index) => {
+    dataset.data = values[index];
+    if (dataset.type === 'line') dataset.tension = isGrowth ? 0 : 0.25;
+  });
   chart.data.datasets[0].hidden = isLog;
   chart.options.scales.y.type = scaleType;
   chart.options.scales.y.beginAtZero = !isLog;
+  chart.options.scales.y.min = isGrowth ? -1 : undefined;
   chart.options.scales.y.ticks.autoSkip = !isBroken;
   scaleMode.hidden = isGrowth;
   scaleLabel.hidden = isGrowth;
