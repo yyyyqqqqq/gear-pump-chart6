@@ -42,6 +42,7 @@
   <select id="metricMode">
     <option value="revenue">季度销额</option>
     <option value="growth">销额环比</option>
+    <option value="shareChange">市占率环比</option>
   </select>
   <label class="hint" id="scaleLabel" for="scaleMode">纵轴刻度</label>
   <select id="scaleMode">
@@ -86,12 +87,40 @@ const growth = revenue.map(values => values.map((value, index) => {
   const previous = values[index - 1];
   return previous > 0 ? (value - previous) / previous : null;
 }));
+const shares = revenue.map(values => values.map((value, index) =>
+  market[index] > 0 ? value / market[index] : null
+));
+const shareChanges = shares.map(values => values.map((value, index) => {
+  const previous = values[index - 1];
+  return index > 0 && previous !== null && value !== null ? (value - previous) * 100 : null;
+}));
+const sharePercent = new Intl.NumberFormat('en-US', {
+  style:'percent', minimumFractionDigits:2, maximumFractionDigits:2
+});
+const ppTicks = new Intl.NumberFormat('en-US', {maximumFractionDigits:1});
+const ppTooltip = new Intl.NumberFormat('en-US', {
+  minimumFractionDigits:2, maximumFractionDigits:2, signDisplay:'exceptZero'
+});
 const metricMode = document.getElementById('metricMode');
 const scaleMode = document.getElementById('scaleMode');
 const scaleLabel = document.getElementById('scaleLabel');
 const chartTitle = document.getElementById('chartTitle');
 const chartHint = document.getElementById('chartHint');
-const showingGrowth = () => metricMode.value === 'growth';
+function tooltipLabel({dataset, parsed, datasetIndex, dataIndex}) {
+  if (metricMode.value === 'shareChange') {
+    const values = shares[datasetIndex];
+    return dataset.label + ': ' + ppTooltip.format(parsed.y) + ' pp（' +
+      sharePercent.format(values[dataIndex - 1]) + ' → ' + sharePercent.format(values[dataIndex]) + '）';
+  }
+  return dataset.label + ': ' + (metricMode.value === 'growth'
+    ? percentTooltip.format(parsed.y) : fmt(parsed.y));
+}
+
+function tickLabel(value) {
+  if (metricMode.value === 'shareChange') return ppTicks.format(value) + ' pp';
+  if (metricMode.value === 'growth') return percentTicks.format(value);
+  return value >= 1000 ? Math.round(value / 1000) + 'k' : value;
+}
 
 const axisBreak = {
   lowerMax: 70000, upperMin: 200000, upperMax: 600000,
@@ -174,18 +203,15 @@ const chart=new Chart(document.getElementById('chart'),{
       legend:{display:false},
       tooltip:{
         filter: c => c.parsed.y !== null,
-        callbacks:{label: c => c.dataset.label + ': ' + (showingGrowth()
-          ? percentTooltip.format(c.parsed.y)
-          : fmt(c.parsed.y))}
+        callbacks:{label:tooltipLabel}
       }
     },
     scales:{
       x:{ticks:{autoSkip:false,font:{size:12}},grid:{display:false}},
       y:{beginAtZero:true,type:BrokenRevenueScale.id,
-         ticks:{autoSkip:false,callback: v => showingGrowth()
-           ? percentTicks.format(v)
-           : (v>=1000?Math.round(v/1000)+'k':v),font:{size:11}},
-         grid:{color: c => showingGrowth() && c.tick?.value === 0 ? '#87919c' : 'rgba(0,0,0,0.06)'}}
+         ticks:{autoSkip:false,callback:tickLabel,font:{size:11}},
+         grid:{color: c => metricMode.value !== 'revenue' && c.tick?.value === 0
+           ? '#87919c' : 'rgba(0,0,0,0.06)'}}
     }
   }
 });
@@ -216,33 +242,38 @@ document.getElementById('noneBtn').onclick=()=>{
 };
 
 function syncChart() {
-  const isGrowth = showingGrowth();
-  const scaleType = isGrowth ? 'linear' : scaleMode.value;
+  const metric = metricMode.value;
+  const isGrowth = metric === 'growth';
+  const isShare = metric === 'shareChange';
+  const isRevenue = metric === 'revenue';
+  const scaleType = isRevenue ? scaleMode.value : 'linear';
   const isLog = scaleType === 'logarithmic';
   const isBroken = scaleType === BrokenRevenueScale.id;
-  const values = isGrowth ? growth : revenue;
+  const values = isShare ? shareChanges : (isGrowth ? growth : revenue);
 
   chart.data.datasets.forEach((dataset, index) => {
     dataset.data = values[index];
-    if (dataset.type === 'line') dataset.tension = isGrowth ? 0 : 0.25;
+    if (dataset.type === 'line') dataset.tension = isRevenue ? 0.25 : 0;
   });
-  chart.data.datasets[0].hidden = isLog;
+  chart.data.datasets[0].hidden = isLog || isShare;
   chart.options.scales.y.type = scaleType;
   chart.options.scales.y.beginAtZero = !isLog;
   chart.options.scales.y.min = isGrowth ? -1 : undefined;
   chart.options.scales.y.ticks.autoSkip = !isBroken;
-  scaleMode.hidden = isGrowth;
-  scaleLabel.hidden = isGrowth;
-  chartTitle.textContent = isGrowth
-    ? '市场大盘与 15 个品牌季度销额环比（%）'
-    : '市场大盘与 15 个品牌季度走势（美元）';
-  if (isGrowth) {
+  scaleMode.hidden = !isRevenue;
+  scaleLabel.hidden = !isRevenue;
+  if (isShare) {
+    chartTitle.textContent = '15 个品牌季度市占率环比（百分点）';
+    chartHint.textContent = '市占率＝品牌季度销额÷同期市场大盘销额 · 环比＝本季市占率－上季市占率（pp） · Q1 留空';
+  } else if (isGrowth) {
+    chartTitle.textContent = '市场大盘与 15 个品牌季度销额环比（%）';
     chartHint.textContent = '浅蓝柱为市场大盘 · 环比＝（本季销额－上季销额）÷上季销额 · Q1 或上季销额为 0 时留空';
-  } else if (isLog) {
-    chartHint.textContent = '对数刻度仅显示品牌曲线 · 点击品牌名可隐藏/显示曲线';
   } else {
-    chartHint.textContent = '浅蓝柱为市场大盘 · ' +
-      (isBroken ? '断轴省略 $70,000–$200,000 · ' : '') + '点击品牌名可隐藏/显示曲线';
+    chartTitle.textContent = '市场大盘与 15 个品牌季度走势（美元）';
+    chartHint.textContent = isLog
+      ? '对数刻度仅显示品牌曲线 · 点击品牌名可隐藏/显示曲线'
+      : '浅蓝柱为市场大盘 · ' + (isBroken ? '断轴省略 $70,000–$200,000 · ' : '') +
+        '点击品牌名可隐藏/显示曲线';
   }
   chart.update();
 }
