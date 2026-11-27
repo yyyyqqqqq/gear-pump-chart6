@@ -36,9 +36,14 @@
 </style>
 </head>
 <body>
-<h1>市场大盘与 15 个品牌季度走势（美元）</h1>
+<h1 id="chartTitle">市场大盘与 15 个品牌季度走势（美元）</h1>
 <div class="bar">
-  <label class="hint" for="scaleMode">纵轴刻度</label>
+  <label class="hint" for="metricMode">指标</label>
+  <select id="metricMode">
+    <option value="revenue">季度销额</option>
+    <option value="growth">销额环比</option>
+  </select>
+  <label class="hint" id="scaleLabel" for="scaleMode">纵轴刻度</label>
   <select id="scaleMode">
     <option value="brokenRevenue">断轴</option>
     <option value="linear">普通线性</option>
@@ -72,6 +77,21 @@ const series=[
 ];
 const market=[237108.59,408851.49,302583.44,347232.60,330087.06,453103.14,465548.96,561948.90];
 const fmt=v=>'$'+Number(v).toLocaleString('en-US');
+const percentTicks = new Intl.NumberFormat('en-US', {style:'percent', maximumFractionDigits:1});
+const percentTooltip = new Intl.NumberFormat('en-US', {
+  style:'percent', minimumFractionDigits:2, maximumFractionDigits:2, signDisplay:'exceptZero'
+});
+const revenue = [market, ...series.map(s => s.d)];
+const growth = revenue.map(values => values.map((value, index) => {
+  const previous = values[index - 1];
+  return previous > 0 ? (value - previous) / previous : null;
+}));
+const metricMode = document.getElementById('metricMode');
+const scaleMode = document.getElementById('scaleMode');
+const scaleLabel = document.getElementById('scaleLabel');
+const chartTitle = document.getElementById('chartTitle');
+const chartHint = document.getElementById('chartHint');
+const showingGrowth = () => metricMode.value === 'growth';
 
 const axisBreak = {
   lowerMax: 70000, upperMin: 200000, upperMax: 600000,
@@ -152,13 +172,20 @@ const chart=new Chart(document.getElementById('chart'),{
     interaction:{mode:'index',intersect:false},
     plugins:{
       legend:{display:false},
-      tooltip:{callbacks:{label:c=>c.dataset.label+': '+fmt(c.parsed.y)}}
+      tooltip:{
+        filter: c => c.parsed.y !== null,
+        callbacks:{label: c => c.dataset.label + ': ' + (showingGrowth()
+          ? percentTooltip.format(c.parsed.y)
+          : fmt(c.parsed.y))}
+      }
     },
     scales:{
       x:{ticks:{autoSkip:false,font:{size:12}},grid:{display:false}},
       y:{beginAtZero:true,type:BrokenRevenueScale.id,
-         ticks:{autoSkip:false,callback:v=>v>=1000?Math.round(v/1000)+'k':v,font:{size:11}},
-         grid:{color:'rgba(0,0,0,0.06)'}}
+         ticks:{autoSkip:false,callback: v => showingGrowth()
+           ? percentTicks.format(v)
+           : (v>=1000?Math.round(v/1000)+'k':v),font:{size:11}},
+         grid:{color: c => showingGrowth() && c.tick?.value === 0 ? '#87919c' : 'rgba(0,0,0,0.06)'}}
     }
   }
 });
@@ -188,21 +215,35 @@ document.getElementById('noneBtn').onclick=()=>{
   chart.update();
 };
 
-const scaleMode = document.getElementById('scaleMode');
-const chartHint = document.getElementById('chartHint');
-scaleMode.onchange = () => {
-  const mode = scaleMode.value;
-  const isLog = mode === 'logarithmic';
-  const isBroken = mode === BrokenRevenueScale.id;
-  chart.options.scales.y.type = mode;
+function syncChart() {
+  const isGrowth = showingGrowth();
+  const scaleType = isGrowth ? 'linear' : scaleMode.value;
+  const isLog = scaleType === 'logarithmic';
+  const isBroken = scaleType === BrokenRevenueScale.id;
+  const values = isGrowth ? growth : revenue;
+
+  chart.data.datasets.forEach((dataset, index) => { dataset.data = values[index]; });
+  chart.data.datasets[0].hidden = isLog;
+  chart.options.scales.y.type = scaleType;
   chart.options.scales.y.beginAtZero = !isLog;
   chart.options.scales.y.ticks.autoSkip = !isBroken;
-  chart.data.datasets[0].hidden = isLog;
-  chartHint.textContent = isLog
-    ? '对数刻度仅显示品牌曲线 · 点击品牌名可隐藏/显示曲线'
-    : '浅蓝柱为市场大盘 · ' + (isBroken ? '断轴省略 $70,000–$200,000 · ' : '') + '点击品牌名可隐藏/显示曲线';
+  scaleMode.hidden = isGrowth;
+  scaleLabel.hidden = isGrowth;
+  chartTitle.textContent = isGrowth
+    ? '市场大盘与 15 个品牌季度销额环比（%）'
+    : '市场大盘与 15 个品牌季度走势（美元）';
+  if (isGrowth) {
+    chartHint.textContent = '浅蓝柱为市场大盘 · 环比＝（本季销额－上季销额）÷上季销额 · Q1 或上季销额为 0 时留空';
+  } else if (isLog) {
+    chartHint.textContent = '对数刻度仅显示品牌曲线 · 点击品牌名可隐藏/显示曲线';
+  } else {
+    chartHint.textContent = '浅蓝柱为市场大盘 · ' +
+      (isBroken ? '断轴省略 $70,000–$200,000 · ' : '') + '点击品牌名可隐藏/显示曲线';
+  }
   chart.update();
-};
+}
+metricMode.onchange = syncChart;
+scaleMode.onchange = syncChart;
 </script>
 </body>
 </html>
